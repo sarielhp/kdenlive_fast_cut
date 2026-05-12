@@ -1,0 +1,397 @@
+#!/usr/bin/env ruby
+
+require 'pathname'
+require 'open3'
+require 'rainbow'
+require 'fileutils'
+
+VERSION = "0.1"
+
+def format_time(seconds)
+  min = seconds.to_i / 60
+  sec = seconds.to_i % 60
+  if min > 0
+    format("%dm %02ds", min, sec)
+  else
+    format("%ds", sec)
+  end
+end
+
+def show_progress(label, pct, start_time)
+  return if pct <= 0
+  
+  elapsed = Time.now - start_time
+  remaining = (elapsed / pct) * (100 - pct)
+  bar_size = 20
+  filled = (pct / (100.0 / bar_size)).to_i
+  bar = "█" * filled + "░" * (bar_size - filled)
+  
+  print "\r#{Rainbow("#{label}: [#{bar}] #{pct.to_s.rjust(3)}%").blue} | " \
+        "Elapsed: #{Rainbow(format_time(elapsed)).cyan} | " \
+        "ETR: #{Rainbow(format_time(remaining)).yellow}   "
+  $stdout.flush
+end
+
+def get_duration(path)
+  cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path.to_s]
+  stdout, status = Open3.capture2(*cmd)
+  status.success? ? stdout.to_f : 0
+rescue
+  0
+end
+
+$command_times = []
+
+def record_time(label, duration, always: false)
+  $command_times << [label, duration] if always || duration > 5
+end
+
+def print_times
+  $command_times.each do |label, duration|
+    puts "Time taken for #{label}: #{Rainbow(format_time(duration)).bold}"
+  end
+end
+
+def print_usage
+  puts <<~USAGE
+    #{Rainbow("kdenlive_fast_cut").bold.blue} v#{VERSION} - A Kdenlive rendering wrapper for high-quality output.
+
+    #{Rainbow("USAGE:").bold}
+        ./kdenlive_fast_cut [OPTIONS] [PROJECT_FILE]
+
+    #{Rainbow("ARGUMENTS:").bold}
+        #{Rainbow("PROJECT_FILE").cyan}    Path to a .kdenlive project file.
+
+    #{Rainbow("OPTIONS:").bold}
+        #{Rainbow("--fast").cyan}          Use H.264 ultrafast (3x larger file, 10x faster).
+        #{Rainbow("--insane").cyan}        Maximum speed (Lossless H.264, huge file, near-IO speed).
+        #{Rainbow("--hybrid").cyan}        Hybrid Smart Cut (Video copy, Audio silence). #{Rainbow("[NOT FOR YOUTUBE]").red}
+        #{Rainbow("--hf").cyan}            Hybrid + Flatten (Exact, fastest, YouTube compatible).
+        #{Rainbow("--hf2").cyan}           Hybrid + Balanced Flatten (Balanced speed/size, YouTube).
+        #{Rainbow("--hf3").cyan}           Hybrid + Efficient Flatten (Smallest file, YouTube). #{Rainbow("[DEFAULT]").green}
+        #{Rainbow("--av1").cyan}           AV1 High Efficiency (Superior compression, very slow).
+        #{Rainbow("-h, --help").cyan}      Show this help message.
+
+    #{Rainbow("FEATURES:").bold}
+        • #{Rainbow("Default:").bold} HF3 (Hybrid + Efficient Flatten) for balanced speed and size.
+        • #{Rainbow("AV1 Mode:").bold} SVT-AV1 for superior compression (but very slow).
+        • #{Rainbow("Fast Mode:").bold} H.264 for near-instant rendering.
+        • #{Rainbow("Insane Mode:").bold} Lossless H.264 for maximum possible speed.
+        • #{Rainbow("Hybrid Mode:").bold} Near-instant, frame-accurate audio (Copy video).
+          #{Rainbow("NOTE:").bold.red} Uses Edit Lists which #{Rainbow("YouTube does NOT support").red}. Use HF modes instead.
+        • #{Rainbow("HF Mode:").bold} Smart hybrid cut + Fastest flattening (CRF 23, ultrafast).
+        • #{Rainbow("HF2 Mode:").bold} Balanced smart hybrid cut + flattening (CRF 20, superfast).
+        • #{Rainbow("HF3 Mode:").bold} Like HF, but optimized for smaller file size (CRF 23, veryfast).
+        • Displays #{Rainbow("Input and Output sizes").green} in MB.
+        • Uses #{Rainbow("AAC").green} audio at 256k (high fidelity).
+        • Real-time progress with #{Rainbow("Estimated Time Remaining (ETR)").yellow}.
+        • Optimized for 12-core CPU with MLT threading enabled.
+        • Generates #{Rainbow("Fast-Start").green} MP4s (ideal for web/streaming).
+
+    #{Rainbow("EXAMPLE:").bold}
+        ./melt_this vacation_video.kdenlive
+        ./melt_this --fast vacation_video.kdenlive
+        ./melt_this --hybrid vacation_video.kdenlive
+        ./melt_this --hf vacation_video.kdenlive
+
+  USAGE
+end
+
+def time_to_s(time_str)
+  parts = time_str.split(':').map(&:to_f)
+  if parts.size == 3
+    parts[0] * 3600 + parts[1] * 60 + parts[2]
+  elsif parts.size == 2
+    parts[0] * 60 + parts[1]
+  else
+    parts[0]
+  end
+end
+
+def run_flatten(input_path, output_path, crf: "18", preset: "ultrafast")
+  puts Rainbow(">>> Flattening for compatibility...").blue.bold
+  duration = get_duration(input_path)
+  
+  cmd = [
+    "ffmpeg", "-y", "-v", "error", "-stats", "-i", input_path.to_s,
+    "-c:v", "libx264", "-crf", crf, "-preset", preset,
+    "-c:a", "copy", "-movflags", "+faststart",
+    output_path.to_s
+  ]
+  
+  start_time = Time.now
+  last_update = start_time
+  
+  # Use popen3 to capture stderr where ffmpeg sends its stats
+  Open3.popen3(*cmd) do |_stdin, _stdout, stderr, wait_thr|
+    stderr.each_line("\r") do |line|
+      if line =~ /time=(\d+):(\d+):(\d+)\.(\d+)/
+        hours, mins, secs, ms = $1.to_i, $2.to_i, $3.to_i, $4.to_i
+        current_secs = hours * 3600 + mins * 60 + secs + ms / 100.0
+        
+        if duration > 0
+          pct = [(current_secs / duration * 100).to_i, 100].min
+          if pct == 100 || (Time.now - last_update) >= 1.0
+            show_progress("Flattening", pct, start_time)
+            last_update = Time.now
+          end
+        end
+      end
+    end
+    puts "\n"
+    wait_thr.value.success?
+  end.tap do |success|
+    record_time("Flattening", Time.now - start_time)
+  end
+end
+
+def get_size_mb(path)
+  size_in_bytes = if path.to_s.end_with?('.kdenlive') && File.exist?(path)
+                    content = File.read(path)
+                    resources = []
+                    content.scan(/<(?:producer|chain)[^>]*>.*?<property\s+name="resource">([^<]+)<\/property>/m) do |res|
+                      res_path = res[0].strip
+                      next if res_path == "black"
+                      
+                      # Resolve relative path
+                      full_res_path = if res_path.start_with?('/')
+                                        res_path
+                                      else
+                                        File.expand_path(res_path, File.dirname(path.to_s))
+                                      end
+                      resources << full_res_path if File.exist?(full_res_path)
+                    end
+                    resources.uniq.sum { |r| File.size(r) }
+                  else
+                    File.exist?(path) ? File.size(path) : 0
+                  end
+  (size_in_bytes.to_f / (1024 * 1024)).round(2)
+end
+
+def run_hybrid(input_file, output_file, flatten: false, crf: "18", preset: "ultrafast")
+  overall_start = Time.now
+  puts Rainbow(">>> Starting Hybrid Render (Edit-List Smart Cut)").blue.bold
+  content = File.read(input_file)
+  
+  # 1. Map all producers/chains to their resources
+  resources = {}
+  content.scan(/<(?:producer|chain)\s+id="([^"]+)"[^>]*>.*?<property\s+name="resource">([^<]+)<\/property>/m) do |id, res|
+    resources[id] = res.strip
+  end
+
+  # 2. Find all playlists and count their entries
+  all_playlists = {}
+  content.scan(/<playlist\s+id="([^"]+)"[^>]*>(.*?)<\/playlist>/m) do |p_id, p_body|
+    next if p_id == "main_bin"
+    
+    entries = []
+    p_body.scan(/<entry\s+in="([^"]+)"\s+out="([^"]+)"\s+producer="([^"]+)"/) do |in_t, out_t, prod_id|
+      res = resources[prod_id]
+      entries << [in_t, out_t, res] if res && res != "black"
+    end
+    all_playlists[p_id] = entries if entries.any?
+  end
+
+  # Pick the playlist with the most entries (the primary track)
+  best_playlist_id = all_playlists.keys.max_by { |id| all_playlists[id].size }
+  final_entries = all_playlists[best_playlist_id] || []
+
+  if final_entries.empty?
+    puts "#{Rainbow("Error:").red} Could not identify the main video track entries."
+    exit 1
+  end
+
+  puts "Selected Playlist: #{Rainbow(best_playlist_id).yellow} (#{final_entries.size} segments)"
+
+  temp_files = []
+  begin
+    final_entries.each_with_index do |(in_str, out_str, resource), idx|
+      resource = File.expand_path(resource, File.dirname(input_file.to_s)) unless resource.start_with?('/')
+      
+      duration = time_to_s(out_str) - time_to_s(in_str)
+      puts "Processing Segment #{idx+1}: #{Rainbow(File.basename(resource)).cyan} [#{in_str} -> #{out_str}]"
+      
+      temp_segment = "temp_seg_#{idx}.mp4"
+      temp_files << temp_segment
+
+      ffmpeg_cmd = [
+        "ffmpeg", "-y", "-v", "error", "-ss", in_str, "-i", resource,
+        "-t", duration.to_s, "-c", "copy", "-avoid_negative_ts", "make_zero",
+        temp_segment
+      ]
+      
+      start = Time.now
+      system(*ffmpeg_cmd)
+      record_time("Segment #{idx+1} (#{File.basename(resource)})", Time.now - start)
+    end
+
+    puts Rainbow(">>> Joining Segments...").blue
+    File.open("concat.txt", "w") do |f|
+      temp_files.each { |tf| f.puts "file '#{tf}'" }
+    end
+    
+    temp_output = Pathname.new(output_file.to_s + ".tmp.mp4")
+    concat_cmd = [
+      "ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
+      "-i", "concat.txt", "-c", "copy", "-movflags", "+faststart",
+      temp_output.to_s
+    ]
+    start = Time.now
+    system(*concat_cmd)
+    record_time("Joining Segments", Time.now - start)
+
+    if flatten
+      run_flatten(temp_output, output_file, crf: crf, preset: preset)
+      File.delete(temp_output) if File.exist?(temp_output)
+    else
+      FileUtils.mv(temp_output, output_file)
+    end
+
+    puts "#{Rainbow("SUCCESS:").green.bold} #{flatten ? "Hybrid+Flatten" : "Hybrid"} render complete."
+    record_time("Total Hybrid Render", Time.now - overall_start, always: true)
+    print_times
+    puts "Input Size:  #{Rainbow(get_size_mb(input_file)).bold} MB"
+    puts "Output Size: #{Rainbow(get_size_mb(output_file)).bold} MB"
+    puts "Output: #{Rainbow(output_file.expand_path).bold}"
+  ensure
+    temp_files.each { |f| File.delete(f) if File.exist?(f) }
+    File.delete("concat.txt") if File.exist?("concat.txt")
+  end
+end
+
+def main
+  if ARGV.empty? || ARGV.include?('-h') || ARGV.include?('--help')
+    print_usage
+    exit 0
+  end
+
+  hf3_mode = ARGV.delete('--hf3')
+  hf2_mode = ARGV.delete('--hf2')
+  hf_mode = ARGV.delete('--hf')
+  hybrid_mode = ARGV.delete('--hybrid')
+  insane_mode = ARGV.delete('--insane')
+  fast_mode = ARGV.delete('--fast')
+  av1_mode = ARGV.delete('--av1')
+
+  # If no mode flag at all, default to hf3
+  if ![hf3_mode, hf2_mode, hf_mode, hybrid_mode, insane_mode, fast_mode, av1_mode].any?
+    hf3_mode = true
+  end
+
+  # Set derived modes
+  hf_mode ||= (hf3_mode || hf2_mode)
+  hybrid_mode ||= hf_mode
+  fast_mode ||= insane_mode
+  
+  input_file = Pathname.new(ARGV[0] || "")
+  
+  unless input_file.exist?
+    puts "#{Rainbow("Error:").red.bold} File '#{input_file}' not found."
+    print_usage
+    exit 1
+  end
+
+  output_file = if input_file.extname == '.kdenlive'
+                  input_file.sub_ext('.mp4')
+                else
+                  Pathname.new(input_file.to_s + '.mp4')
+                end
+
+  full_output_path = output_file.expand_path
+  
+  if hybrid_mode
+    if hf3_mode
+      run_hybrid(input_file, full_output_path, flatten: true, crf: "23", preset: "veryfast")
+    elsif hf2_mode
+      run_hybrid(input_file, full_output_path, flatten: true, crf: "20", preset: "superfast")
+    else
+      run_hybrid(input_file, full_output_path, flatten: hf_mode, crf: "23")
+    end
+    exit 0
+  end
+
+  if insane_mode
+    profile_name = "Insane (H.264 Lossless Ultrafast)"
+    vcodec = "libx264"
+    v_params = ["preset=ultrafast", "crf=0"]
+    video_info = "#{Rainbow("libx264").yellow}    | Preset: ultrafast | CRF: 0 (Lossless)"
+  elsif fast_mode
+    profile_name = "Fast (H.264 Ultrafast)"
+    vcodec = "libx264"
+    v_params = ["preset=ultrafast", "crf=20"]
+    video_info = "#{Rainbow("libx264").yellow}    | Preset: ultrafast | CRF: 20"
+  else
+    profile_name = "AV1 (SVT-AV1 High Efficiency)"
+    vcodec = "libsvtav1"
+    v_params = ["preset=6", "crf=24", "g=300", "svtav1-params=tune=0"]
+    video_info = "#{Rainbow("libsvtav1").yellow} | Preset: 6 | CRF: 24 | G: 300"
+  end
+
+  cmd = [
+    "melt", "-progress", "-profile", "atsc_1080p_30",
+    input_file.to_s,
+    "-consumer", "avformat:#{output_file}",
+    "vcodec=#{vcodec}", *v_params,
+    "acodec=aac", "ab=256k", "ar=48000", "ac=2",
+    "movflags=+faststart",
+    "threads=12", "real_time=-12", "multi=1", "buffer=100"
+  ]
+
+  puts Rainbow(">>> Starting Render").blue.bold
+  puts "Input:    #{Rainbow(input_file).cyan}"
+  puts "Output:   #{Rainbow(full_output_path).green}"
+  puts "Profile:  #{Rainbow(profile_name).magenta}"
+  puts Rainbow("Encoding Settings:").bold
+  puts "  Video:  #{video_info}"
+  puts "  Audio:  #{Rainbow("aac").yellow}        | Bitrate: 256k | Rate: 48kHz"
+  puts "  Format: #{Rainbow("mp4").yellow}        | Fast-start: Enabled"
+  puts "  Engine: #{Rainbow("MLT").yellow}        | Threads: 12 | Multi: 1 | Buffer: 100"
+  puts Rainbow("-" * 60).color(:gray)
+
+  start_time = Time.now
+  update_interval = 1.0
+  last_update_time = start_time - update_interval
+
+  begin
+    Open3.popen2e(*cmd) do |_stdin, stdout_err, wait_thr|
+      stdout_err.each_line("\r") do |line|
+        if line =~ /percentage:\s+(\d+)/
+          pct = $1.to_i
+          current_time = Time.now
+          
+          if pct == 100 || (current_time - last_update_time) >= update_interval
+            last_update_time = current_time
+            show_progress("Progress", pct, start_time)
+          end
+        else
+          clean_line = line.tr("\r", "").strip
+          if !clean_line.empty? && !clean_line.start_with?("Current Frame:")
+            puts "\n#{Rainbow("[melt] #{clean_line}").color(:gray)}"
+          end
+        end
+      end
+      exit_status = wait_thr.value
+      puts "\n" 
+      if exit_status.success?
+        total_elapsed = Time.now - start_time
+        puts Rainbow("-" * 60).color(:gray)
+        puts "#{Rainbow("SUCCESS:").green.bold} Rendering complete."
+        record_time("Total Render", total_elapsed, always: true)
+        print_times
+        puts "Input Size:  #{Rainbow(get_size_mb(input_file)).bold} MB"
+        puts "Output Size: #{Rainbow(get_size_mb(full_output_path)).bold} MB"
+        puts "File: #{Rainbow(full_output_path).bold}"
+      else
+        puts "#{Rainbow("FAILED:").red.bold} Melt exited with status #{exit_status.exitstatus}"
+      end
+    end
+  rescue Interrupt
+    puts "\n\n#{Rainbow("Interrupted by user. Exiting...").yellow}"
+    exit 130
+  rescue => e
+    puts "\n\n#{Rainbow("An error occurred:").red.bold} #{e.message}"
+    exit 1
+  end
+end
+
+main if __FILE__ == $0
