@@ -10,7 +10,15 @@ Unlike standard Kdenlive rendering which **re-encodes every single frame** of yo
 2. **Audio Sync**: It generates a clean, frame-accurate audio track to ensure perfect synchronization.
 3. **Optional Flattening**: To ensure compatibility with platforms like YouTube (which do not support MP4 Edit Lists), it can "flatten" the resulting cut into a standard H.264 file at extremely high speeds.
 
-This makes it the ideal tool for **Zoom recordings, slide talks, and simple edits** where full re-encoding is a waste of time and energy.
+## Why not just use Kdenlive?
+
+You might wonder if this tool is necessary given that Kdenlive is a powerful editor. The answer lies in the difference between **Rendering** and **Splicing**:
+
+- **Kdenlive is an NLE**: Its engine (MLT) is designed for complex compositing and effects. Because of this, Kdenlive **always re-encodes every pixel** of your video during a render, even if you haven't applied any effects. This is a slow, CPU-intensive process.
+- **Smart Cutting**: `kdenlive_fast_cut` performs "Smart Cutting" at the bitstream level. It identifies the exact segments in your `.kdenlive` XML and uses `ffmpeg` to copy the video streams directly. This bypasses the entire rendering pipeline, moving the bottleneck from your CPU's encoding speed to your disk's I/O speed.
+- **The "Lossless" Problem**: While Kdenlive offers "lossless" profiles, they still require a full render pass (slow) and produce massive file sizes (hundreds of gigabytes). This tool gives you the original quality and size at the speed of a file copy.
+
+For Zoom recordings, slide talks, and simple edits, `kdenlive_fast_cut` is a surgical tool that saves hours of unnecessary rendering time.
 
 ## Features
 
