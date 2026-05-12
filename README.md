@@ -124,3 +124,5 @@ The "HF" (Hybrid + Flatten) modes solve the YouTube compatibility problem while 
 - **Why it's still fast**: Even though it's re-encoding, it is 5-10x faster than Kdenlive because it doesn't have to process the complex MLT (Media Lovin' Toolkit) engine. It isn't calculating transitions, titles, or effects; it's just flattening a single, already-assembled stream.
 
 **The Result**: You get a standard, "flat" H.264 MP4 that is compatible with YouTube, mobile devices, and web browsers, delivered relatively quickly compared to a standard render.
+
+Credit: This program was written using vibe programming, via gemini-cli.
