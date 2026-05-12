@@ -4,6 +4,8 @@ A high-performance rendering wrapper for Kdenlive projects, optimized for speed 
 
 ## The "Fast Cut" Advantage
 
+**Note:** This program was specifically designed for uploading **recorded talks (usually Zoom recordings) to YouTube** with maximum efficiency.
+
 Unlike standard Kdenlive rendering which **re-encodes every single frame** of your project (a slow and CPU-intensive process), `kdenlive_fast_cut` uses a "Smart Cutting" approach:
 
 1. **Video Stream Copy**: For segments where no effects are applied, it copies the original video data directly. This is near-instant and preserves 100% of the original quality.
@@ -19,6 +21,16 @@ You might wonder if this tool is necessary given that Kdenlive is a powerful edi
 - **The "Lossless" Problem**: While Kdenlive offers "lossless" profiles, they still require a full render pass (slow) and produce massive file sizes (hundreds of gigabytes). This tool gives you the original quality and size at the speed of a file copy.
 
 For Zoom recordings, slide talks, and simple edits, `kdenlive_fast_cut` is a surgical tool that saves hours of unnecessary rendering time.
+
+## Disclaimers & Limitations
+
+This script is a specialized tool for **fast splicing**. It does **NOT** support the full range of Kdenlive features:
+
+- **No Effects/Transitions**: Any transitions (dissolves, wipes) or effects applied in the Kdenlive timeline will be **ignored**.
+- **No Titles/Overlays**: Kdenlive title clips or overlays will not be rendered.
+- **Single Track Focus**: The script focuses on the primary video track. Complex multi-track compositing is not supported.
+
+If your project requires effects, titles, or complex compositing, you should use Kdenlive's built-in **Render** button.
 
 ## Features
 
