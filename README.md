@@ -28,6 +28,16 @@ For Zoom recordings, slide talks, and simple edits, `kdenlive_fast_cut` is a sur
 - **Real-time Feedback**: Beautiful progress bars with Estimated Time Remaining (ETR) for all stages.
 - **Natural Timing**: Displays exactly how long each stage took (if > 5s) and the total overall time.
 
+## Typical Workflow
+
+1. **Edit in Kdenlive**: Open your video in Kdenlive. Use the timeline to cut out the parts you don't want (like "dead air," mistakes, or sensitive info).
+2. **Save Project**: Simply save your project as a `.kdenlive` file. You do **not** need to click the "Render" button in Kdenlive.
+3. **Fast Cut**: Run this script on the saved project file:
+   ```bash
+   ./kdenlive_fast_cut your_project.kdenlive
+   ```
+The script will analyze your timeline and produce a high-quality MP4 almost instantly.
+
 ## Usage
 
 ```bash
